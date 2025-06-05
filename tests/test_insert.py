@@ -14,10 +14,9 @@ def insert_points() -> list[vec]:
     return out
 
 
-@pytest.fixture
-def built_tree(insert_points) -> HNSW:
+def build_tree(insert_points) -> HNSW:
     tree = hnsw.HNSW(
-        10,
+        50,
         20,
     )
     for point in insert_points:
@@ -28,19 +27,20 @@ def built_tree(insert_points) -> HNSW:
 def test_insert(insert_points) -> None:
     tree = hnsw.HNSW(
         10,
-        20,
+        10,
     )
     for point in insert_points:
         tree.insert(point)
 
 
-def test_hnsw_vs_knn(built_tree, insert_points) -> None:
+def test_hnsw_vs_knn(insert_points) -> None:
     """Test HNSW search against brute force k-NN implementation"""
     # Create query vectors (different from insert_points)
+    built_tree = build_tree(insert_points)
     query_vectors = [tuple(random.random() for _ in range(5)) for _ in range(5)]
 
     # Number of neighbors to retrieve
-    k = 10
+    k = 3
 
     for query in query_vectors:
         # Get approximate nearest neighbors using HNSW
@@ -54,9 +54,5 @@ def test_hnsw_vs_knn(built_tree, insert_points) -> None:
         common_vectors = hnsw_vectors.intersection(exact_nn)
         recall = len(common_vectors) / len(exact_nn)
 
-        # HNSW is approximate, so we don't expect 100% recall
-        # but it should find at least some percentage of the true nearest neighbors
-        # assert recall >= 0.3  # At least 30% recall
-
-        # Also verify HNSW returns the correct number of results
+        assert recall >= 0.6
         assert len(hnsw_results) == k

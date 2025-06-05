@@ -1,6 +1,10 @@
+import logging
+
 import pytest
 import random
 from typing import List
+
+import hnsw
 from hnsw import Node, vec, search_layer, LayerId, k_nn
 
 
@@ -50,16 +54,22 @@ def fully_connected_nodes() -> list[Node]:
     return nodes
 
 
-def test_search_layer_fc() -> None:
-    nodes = fully_connected_nodes()
-    query_node = tuple(random.random() for _ in range(5))
-    entry_point = nodes[10]
+def test_fc() -> None:
+    for k in range(3,10):
+        nodes = fully_connected_nodes()
+        query_node = tuple(random.random() for _ in range(5))
+        entry_point = nodes[10]
 
-    out = search_layer(query_node, [entry_point], 3, 1)
-    true = k_nn(query_node, [n.v for n in nodes], 3)
-    out_set = set(out.get_furthest().v for _ in range(len(out)))
-    true_set = set(true)
-    assert out_set.intersection(true_set)
+        out = search_layer(query_node, [entry_point], k, 1)
+        true = k_nn(query_node, [n.v for n in nodes], k)
+        out_set = set(o.v for o in out.nodes())
+        true_set = set(true)
+        fail_message = ", ".join(f"{hnsw.l2(o,query_node)}" for o in out_set)
+        true_msg = ", ".join(f"{hnsw.l2(o,query_node)}" for o in true)
+        logging.info(fail_message)
+        logging.info(true_msg)
+        assert out_set == true_set, fail_message
+        assert out_set.intersection(true_set)
 
 
 def test_search_layer_single_entry_point(

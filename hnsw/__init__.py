@@ -26,12 +26,17 @@ class Node:
     adjacent_nodes: dict[LayerId, list[Node]] = field(
         default_factory=lambda: defaultdict(list)
     )
+    id: int | None = None
 
     def __hash__(self) -> int:
         return hash(self.v)
+    def __eq__(self, other: Node) -> bool:
+        return self.v == other.v
 
     def layer_neigbours(self, id: LayerId) -> list[Node]:
         return self.adjacent_nodes[id]
+    def add_layer_neighbour(self, id: LayerId, neighbour: Node) -> None:
+        self.adjacent_nodes[id].append(neighbour)
 
 
 class MinDistanceHeap:
@@ -183,7 +188,8 @@ def search_layer(
         if closest_node_dist > found_nodes.get_furthest_dist():
             break
 
-        for neighbour in closest_node.layer_neigbours(layer_id):
+        for i, neighbour in enumerate(closest_node.layer_neigbours(layer_id)):
+            log.debug("Neigbour %s", i)
             #
             if neighbour in visited_elements:
                 continue
@@ -197,14 +203,13 @@ def search_layer(
                 or len(found_nodes) < retrival_count
             ):
                 #
-                candidate_nodes.push(closest_node)
-                found_nodes.push(closest_node)
+                log.debug("added")
+                candidate_nodes.push(neighbour)
+                found_nodes.push(neighbour)
                 #
-                while len(found_nodes) > retrival_count:
-                    found_nodes.pop_furthest()
 
-    while len(found_nodes) > retrival_count:
-        found_nodes.pop_furthest()
+                if len(found_nodes) > retrival_count:
+                    found_nodes.pop_furthest()
 
     return found_nodes
 
@@ -224,33 +229,38 @@ class HNSW:
         self.top_layer_id = 0
         self.normalisation_factor: float = normalisation_factor
         self.number_of_connections: int = number_of_connections
+        self.node_count: int = 0
 
     def sample_layer_id(self) -> LayerId:
         x = -math.log(random.random()) * self.normalisation_factor
         return math.floor(x)
 
     def insert(self, query_node: vec) -> None:
+        log.info("BEGIN: Inserting %s node %s", query_node, self.node_count)
+        node_id = self.node_count
+        self.node_count += 1
         target_layer = self.sample_layer_id()
         # Handle no nodes.
         if self.entry_point is None:
             self.top_layer_id = target_layer
             self.entry_point = Node(query_node)
+            self.entry_point.id = node_id
             return
         top_layer_id = self.top_layer_id
         log.debug(f"Insertion target layer:{target_layer}, top layer:{top_layer_id}")
-        step = 1 if top_layer_id > target_layer else -1
         new_node = Node(query_node)
-        neighbours = []
+        new_node.id = node_id
         entry_point = self.entry_point
         # Climb up or down
         # Greedily searching the layer for the closest node.
-        for layer_id in range(top_layer_id, target_layer + 1, step):
+        for layer_id in range(top_layer_id, target_layer + 1):
             [entry_point] = search_layer(query_node, [entry_point], 1, layer_id).nodes()
-            log.debug("Found entry_point")
+            log.debug("Found entry_point %s", entry_point.id)
 
         entry_points = [entry_point]
         # Descend down the tree
-        for layer_id in range(min(top_layer_id, target_layer), 0, -1):
+        for layer_id in range(min(top_layer_id, target_layer), -1, -1):
+            log.debug(f"Searching layer %s for entry_points", layer_id)
             candiates = search_layer(
                 query_node,
                 entry_points,
@@ -264,11 +274,16 @@ class HNSW:
             )
             # Form links at this layer
             for neighbour in neighbours:
-                new_node.layer_neigbours(layer_id).append(neighbour)
-                neighbour.layer_neigbours(layer_id).append(new_node)
+                log.debug("Adding bidirectional link between %s and %s", new_node.id, neighbour.id)
+                new_node.add_layer_neighbour(layer_id, neighbour)
+                neighbour.add_layer_neighbour(layer_id, new_node)
+                if layer_id != 0:
+                    max_conn = self.max_connections
+                else:
+                    max_conn = self.construction_search_max * 2
                 if (
                     len(ns := neighbour.layer_neigbours(layer_id))
-                    > self.max_connections
+                    > max_conn
                 ):
                     pruned_neigbourhood = select_neighbours_simple(
                         neighbour.v, ns, self.max_connections, layer_id
@@ -277,8 +292,11 @@ class HNSW:
             entry_points = candiates
 
         if target_layer > top_layer_id:
-            entry_point = new_node
+            self.entry_point = new_node
             self.top_layer_id = target_layer
+            
+        log.info("END: Inserted %s node %s", query_node, self.entry_point.id)
+        
 
     def search(self, query_node: vec, k: int, max_candiates: int = 20) -> list[Node]:
         if self.entry_point is None:
